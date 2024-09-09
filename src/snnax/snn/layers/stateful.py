@@ -1,7 +1,5 @@
 from typing import Callable, Optional, Sequence, Tuple, Union
-
 import jax.numpy as jnp
-
 import equinox as eqx
 from chex import Array, PRNGKey
 
@@ -33,6 +31,7 @@ class StatefulLayer(eqx.Module):
             self.init_fn = init_fn
         self.shape = shape
 
+    #Emre: Is this method necessary? the parameters are already created when the modules are instantiated
     @staticmethod
     def init_parameters(parameters: Union[float, Sequence[float]],
                         shape: StateShape) -> Array:

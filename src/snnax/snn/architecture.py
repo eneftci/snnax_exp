@@ -101,18 +101,18 @@ def default_forward_fn(layers: Sequence[eqx.Module],
         if isinstance(layer, StatefulLayer):
             new_state, new_out = layer(state, inputs, key=key)
             new_states.append(new_state)
-            if ilayer == len(layers) - 1:
-                new_outs.append(new_out)
         elif isinstance(layer, RequiresStateLayer):
             new_out = layer(inputs_v, key=key)
             new_states.append([new_out])
-            if ilayer == len(layers)-1:
-                new_outs.append(new_out)            
+        elif isinstance(layer, eqx.nn.StatefulLayer):
+            new_out, new_state = layer(inputs, state, key=key)
+            new_states.append(new_state)
         else:
             new_out = layer(inputs, key=key)
             new_states.append([new_out])
-            if ilayer == len(layers) - 1:
-                new_outs.append(new_out)
+
+        if ilayer == len(layers) - 1:
+            new_outs.append(new_out)
 
     return new_states, new_outs 
 
