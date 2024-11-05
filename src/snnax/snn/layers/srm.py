@@ -9,6 +9,14 @@ from chex import Array, PRNGKey
 from .stateful import StatefulLayer, StateShape
 from ...functional.surrogate import superspike_surrogate, SpikeFn
 
+class TrainableArray(eqx.Module):
+    data: Array
+    requires_grad: bool = True
+
+    def __init__(self, array, requires_grad=True):
+        self.data = array
+        self.requires_grad = requires_grad
+
 class SRM(StatefulLayer):
     """
     Implementation follows Gerstner et al.(1993) which can be found under the following link:
@@ -30,8 +38,9 @@ class SRM(StatefulLayer):
             Defaults to initialization with zeros if nothing else is provided.
     """
     layer: eqx.Module 
-    decay_constants: Union[Sequence[float], Array]     
-    r_decay_constants: Union[Sequence[float], Array]     
+    log_alpha: Union[Sequence[float], Array]     
+    log_beta: Union[Sequence[float], Array]     
+    log_gamma: Union[Sequence[float], Array]     
     threshold: Union[float, Array]
     spike_fn: SpikeFn
     reset_val: Optional[Union[float, Array]]
@@ -51,19 +60,19 @@ class SRM(StatefulLayer):
                 key: Optional[PRNGKey] = None) -> None:
         super().__init__(init_fn, shape)
         # TODO assert for numerical stability 0.999 leads to errors...
-        self.decay_constants = decay_constants
         self.threshold = threshold
         self.spike_fn = spike_fn
         self.stop_reset_grad = stop_reset_grad
         self.layer = layer
 
-        self.decay_constants = self.init_parameters(decay_constants, input_shape)
-        self.r_decay_constants = self.init_parameters(r_decay_constants, shape)
+        self.log_alpha = TrainableArray(jnp.log(decay_constants[0] * jnp.ones(input_shape))) 
+        self.log_beta = TrainableArray(jnp.log(decay_constants[1] * jnp.ones(input_shape))) 
+        self.log_gamma = TrainableArray(jnp.log(r_decay_constants[0] * jnp.ones(shape)))
         
         if reset_val is None:
-            self.reset_val = self.init_parameters([0], shape, requires_grad=False)
+            self.reset_val = TrainableArray(self.init_parameters([0], shape))
         else:
-            self.reset_val = self.init_parameters(reset_val, shape, requires_grad=True)
+            self.reset_val = TrainableArray(self.init_parameters(reset_val, shape))
 
     def init_state(self, 
                    shape: Union[Sequence[int], int], 
@@ -89,9 +98,9 @@ class SRM(StatefulLayer):
 
         p, q, r, s = state
 
-        alpha = jax.lax.clamp(0.5, self.decay_constants.data[0], 1.0)
-        beta = jax.lax.clamp(0.5, self.decay_constants.data[1], 1.0)
-        gamma = jax.lax.clamp(0.5, self.r_decay_constants.data[0], 1.0)
+        alpha = jax.lax.clamp(0.5, jnp.exp(self.log_alpha.data), 1.0)
+        beta = jax.lax.clamp(0.5, jnp.exp(self.log_beta.data), 1.0)
+        gamma = jax.lax.clamp(0.5, jnp.exp(self.log_gamma.data), 1.0)
         reset_val = jax.lax.clamp(0.0, self.reset_val.data[0], 2.0)
 
         p = alpha*p + (1.-alpha)*synaptic_input

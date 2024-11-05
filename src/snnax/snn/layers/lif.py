@@ -5,11 +5,19 @@ import jax.nn as jnn
 import jax.lax as lax
 import jax.numpy as jnp
 from jax.lax import stop_gradient, clamp
+import equinox as eqx
 
 from .stateful import StatefulLayer, StateShape, default_init_fn, StatefulOutput
 from ...functional.surrogate import superspike_surrogate, SpikeFn
 from chex import Array, PRNGKey
 
+class TrainableArray(eqx.Module):
+    data: Array
+    requires_grad: bool = True
+
+    def __init__(self, array, requires_grad=True):
+        self.data = array
+        self.requires_grad = requires_grad
 
 class SimpleLIF(StatefulLayer):
     """
@@ -288,4 +296,80 @@ class AdaptiveLIF(StatefulLayer):
 
         state = [mem_pot, ada_var_new, spike_output]
         return [state, spike_output]
+
+class AdLIF(StatefulLayer):
+    """
+    Implementation of a adaptive exponential leaky integrate-and-fire neuron
+    as presented Bittar and Garner
+    
+    Arguments:
+        `decay_constants` (Array): Decay constants for the LIF neuron.
+        `spike_fn` (SpikeFn): Spike treshold function with custom surrogate gradient.
+        `threshold` (Array): Spike threshold for membrane potential. Defaults to 1.
+        `init_fn` (Callable): Function to initialize the state of the spiking neurons.
+            Defaults to initialization with zeros if nothing else is provided.
+        `shape` (StateShape): Shape of the neuron layer.
+        `key` (PRNGKey): Random number generator key for initialization of parameters.
+    """
+    alpha: Array
+    beta: Array 
+    a: Array 
+    b: Array 
+    threshold: Array
+    spike_fn: Callable
+
+    def __init__(self,
+#                decay_constants: float,
+#                ada_decay_constant: float = [.8] ,
+#                ada_step_val: float = [1.0],
+#                ada_coupling_var: float = [.5],
+                spike_fn: Callable = superspike_surrogate(10.),
+                threshold: float = 1.,
+                init_fn: Optional[Callable] = None,
+                shape: Optional[StateShape] = None,
+                key: Optional[PRNGKey] = None, **kwargs) -> None:
+        super().__init__(init_fn)
+        print('AdLIF unused kwargs', kwargs.keys())
+
+        self.threshold = threshold
+        self.spike_fn = spike_fn
+        init_key, key = jax.random.split(key,2)
+        self.alpha = TrainableArray(jax.random.uniform(minval=jnp.exp(-1/5), maxval=jnp.exp(-1/25),shape=shape, key=init_key))
+        init_key, key = jax.random.split(key,2)
+        self.beta = TrainableArray(jax.random.uniform(minval=jnp.exp(-1/30), maxval=jnp.exp(-1/120),shape=shape,key=init_key))
+        init_key, key = jax.random.split(key,2)
+        self.a = TrainableArray( jax.random.uniform(minval=-1, maxval=1., shape=shape, key=init_key) )
+        init_key, key = jax.random.split(key,2)
+        self.b = TrainableArray( jax.random.uniform(minval=0, maxval=2., shape=shape, key=init_key) )
+       
+    def init_state(self, 
+                    shape: Union[Sequence[int], int], 
+                    key: PRNGKey, 
+                    *args, 
+                    **kwargs) -> Sequence[Array]:
+        init_state_mem_pot = self.init_fn(shape, key, *args, **kwargs)
+        init_state_ada = jnp.zeros(shape)
+        init_state_spikes = jnp.zeros(shape)
+        return [init_state_mem_pot, init_state_ada, init_state_spikes]
+
+    def __call__(self, 
+                state: Sequence[Array], 
+                synaptic_input: Array, 
+                *, key: Optional[PRNGKey] = None) -> StatefulOutput:
+        ut, wt, st = state
+
+        alpha = clamp(jnp.exp(-1/5),self.alpha.data, jnp.exp(-1/25))
+        beta = clamp(jnp.exp(-1/30), self.beta.data, jnp.exp(-1/120)) 
+        a = clamp(-1.,self.a.data, 1.)
+        b = clamp(0.,self.b.data, 2.)
+
+        # Calculation of the adaptive part of the dynamics
+        wt = a * ut  + beta*wt + b*st
+        # Calculation of the membrane potential
+        ut = alpha*(ut-st) + (1.-alpha)*(synaptic_input - wt)
+        st = self.spike_fn(ut - self.threshold)
+
+        # Optionally stop gradient propagation through refectory potential       
+        state = [ut, wt, st]
+        return [state, st]
 

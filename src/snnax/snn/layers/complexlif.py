@@ -94,5 +94,39 @@ class ComplexLIF(StatefulLayer):
         state = [mem_pot, spike_output]
         return [state, spike_output]
 
+class AdaptiveLIF(ComplexLIF):
 
+    def init_state(self, 
+                   shape: Union[Sequence[int], int], 
+                   key: PRNGKey = None, 
+                   *args, 
+                   **kwargs) -> Sequence[Array]:
+        init_state_mem_pot = jnp.zeros(shape, dtype=jnp.float32, *args, **kwargs)
+        init_state_adap = jnp.zeros(shape, dtype=jnp.float32, *args, **kwargs)
+        init_state_spikes = jnp.zeros(shape)
+        return [init_state_mem_pot, init_state_adap, init_state_spikes]
+
+    def __call__(self, 
+                state: Sequence[Array], 
+                synaptic_input: Array, 
+                *, key: Optional[PRNGKey] = None) -> StatefulOutput:
+        mem_pot, adap, st = state
+
+        # Bound values of the neuron parameters to plausible ranges
+        #log_log__alpha = torch.clamp(self.log_log_alpha, min=self.log_log_alpha_lim[0], max=self.log_log_alpha_lim[1])
+        alpha = jnp.exp((-jnp.exp(self.log_log_alpha.data)+1j*self.alpha_img.data)*jnp.exp(self.log_dt.data))
+        # Loop over time axis
+
+        ## Todo: add adaptation state
+        # Compute membrane potential (LIF)
+        if self.stop_reset_grad:
+            mem_pot = alpha * (mem_pot - self.reset_val*self.threshold*jax.lax.stop_gradient(st)) + self.b.data * synaptic_input
+        else:
+            mem_pot = alpha * (mem_pot - self.reset_val*self.threshold*st) + self.b.data * synaptic_input 
+
+        # Compute spikes with surrogate gradient
+        spike_output = self.spike_fn(mem_pot - self.threshold)
+
+        state = [mem_pot, adap, spike_output]
+        return [state, spike_output]
 
