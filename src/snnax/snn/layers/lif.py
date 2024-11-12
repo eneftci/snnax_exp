@@ -373,3 +373,84 @@ class AdLIF(StatefulLayer):
         state = [ut, wt, st]
         return [state, st]
 
+class AdLIFfixtau(StatefulLayer):
+    """
+    Implementation of a adaptive exponential leaky integrate-and-fire neuron
+    as presented Bittar and Garner
+    
+    Arguments:
+        `decay_constants` (Array): Decay constants for the LIF neuron.
+        `spike_fn` (SpikeFn): Spike treshold function with custom surrogate gradient.
+        `threshold` (Array): Spike threshold for membrane potential. Defaults to 1.
+        `init_fn` (Callable): Function to initialize the state of the spiking neurons.
+            Defaults to initialization with zeros if nothing else is provided.
+        `shape` (StateShape): Shape of the neuron layer.
+        `key` (PRNGKey): Random number generator key for initialization of parameters.
+    """
+    alpha: Array
+    beta: Array 
+    a: Array 
+    b: Array 
+    threshold: Array
+    spike_fn: Callable
+
+    def __init__(self,
+                decay_constants: float = [.95],
+                ada_decay_constant: float = [.9] ,
+                ada_step_val: float = [1.0],
+                ada_coupling_var: float = [.5],
+                spike_fn: Callable = superspike_surrogate(10.),
+                threshold: float = 1.,
+                init_fn: Optional[Callable] = None,
+                shape: Optional[StateShape] = None,
+                key: Optional[PRNGKey] = None, **kwargs) -> None:
+        super().__init__(init_fn)
+        print('key', key)
+        print('AdLIF unused kwargs', kwargs.keys())
+
+        self.threshold = threshold
+        self.spike_fn = spike_fn
+        init_key, key = jax.random.split(key,2)
+#        self.alpha = jax.random.uniform(minval=jnp.exp(-1/5), maxval=jnp.exp(-1/25),shape=shape, key=init_key)
+#        init_key, key = jax.random.split(key,2)
+#        self.beta = jax.random.uniform(minval=jnp.exp(-1/30), maxval=jnp.exp(-1/120),shape=shape,key=init_key)
+#        init_key, key = jax.random.split(key,2)
+#        self.a = jax.random.uniform(minval=-1, maxval=1., shape=shape, key=init_key) 
+#        init_key, key = jax.random.split(key,2)
+#        self.b = jax.random.uniform(minval=0, maxval=2., shape=shape, key=init_key) 
+#
+#        self.alpha = clamp(jnp.exp(-1/5),self.alpha, jnp.exp(-1/25))
+#        self.beta = clamp(jnp.exp(-1/30), self.beta, jnp.exp(-1/120)) 
+#        self.a = clamp(-1.,self.a, 1.)
+#        self.b = clamp(0.,self.b, 2.)
+        self.alpha = clamp(jnp.exp(-1/5), decay_constants[0], jnp.exp(-1/25))
+        self.beta = clamp(jnp.exp(-1/30), ada_decay_constant[0], jnp.exp(-1/120)) 
+        self.a = clamp(-1., ada_step_val[0], 1.)
+        self.b = clamp(0., ada_coupling_var[0], 2.)
+
+    def init_state(self, 
+                    shape: Union[Sequence[int], int], 
+                    key: PRNGKey, 
+                    *args, 
+                    **kwargs) -> Sequence[Array]:
+        init_state_mem_pot = self.init_fn(shape, key, *args, **kwargs)
+        init_state_ada = jnp.zeros(shape)
+        init_state_spikes = jnp.zeros(shape)
+        return [init_state_mem_pot, init_state_ada, init_state_spikes]
+       
+    def __call__(self, 
+                state: Sequence[Array], 
+                synaptic_input: Array, 
+                *, key: Optional[PRNGKey] = None) -> StatefulOutput:
+        ut, wt, st = state
+
+        # Calculation of the adaptive part of the dynamics
+        # Calculation of the membrane potential
+        wt = self.a * ut  + self.beta*wt + self.b*st
+        ut = self.alpha*(ut-st) + (1.-self.alpha)*(synaptic_input - wt)
+        st = self.spike_fn(ut - self.threshold)
+
+        # Optionally stop gradient propagation through refectory potential       
+        state = [ut, wt, st]
+        return [state, st]
+
